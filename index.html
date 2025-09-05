@@ -33,7 +33,7 @@
     <div id="best">🏆 0.0s</div>
   </div>
   <div id="rightHUD" class="hud">
-    <button id="btnPause" title="Pause/Resume (P)">⏸︎/▶︎</button>
+    <button id="btnPause" title="Pause/Resume (P o Space)">⏸︎/▶︎</button>
     <button id="btnMute" title="Mute/Unmute (M)">🔈</button>
     <button id="btnRestart" title="Restart (R)">↻</button>
     <button id="btnLoad" title="Cargar sprite PNG">🖼️ Sprite</button>
@@ -103,7 +103,7 @@ let crowSpritesReady=false; const crowImgs=[]; const CROW_SOURCES=['sprite/cuerv
 
 // ---------- Input ----------
 const keys = { ArrowUp:false, ArrowDown:false, ArrowLeft:false, ArrowRight:false };
-addEventListener('keydown', e=>{ if(e.code in keys){ keys[e.code]=true; e.preventDefault(); } if(e.code==='KeyP'){togglePause();} if(e.code==='KeyM'){toggleMute();} if(e.code==='KeyR'){restart();} });
+addEventListener('keydown', e=>{ if(e.code in keys){ keys[e.code]=true; e.preventDefault(); } if(e.code==='Space' || e.code==='Spacebar'){ e.preventDefault(); togglePause(); } if(e.code==='KeyP'){togglePause();} if(e.code==='KeyM'){toggleMute();} if(e.code==='KeyR'){restart();} });
 addEventListener('keyup', e=>{ if(e.code in keys){ keys[e.code]=false; e.preventDefault(); } });
 
 // ---------- Audio ----------
@@ -115,10 +115,22 @@ function makeMusic(){ const bpm=128, beat=60/bpm, scale=[0,2,4,7,9]; function no
 // ---------- Game state ----------
 const State={INTRO:0,PLAY:1,FALL:2,GAMEOVER:3}; let state=State.INTRO;
 let startTime=performance.now(), elapsed=0, best=parseFloat(localStorage.getItem('bt_best')||'0')||0;
+// Pausa: track de tiempo realmente jugado
+let paused=false, pausedAt=0, pausedAccum=0;
 const timerEl=document.getElementById('timer'); const bestEl=document.getElementById('best'); if(bestEl) bestEl.textContent='🏆 '+best.toFixed(1)+'s';
 const btnPause=document.getElementById('btnPause'); const btnRestart=document.getElementById('btnRestart'); const btnMute=document.getElementById('btnMute');
 btnPause?.addEventListener('click', ()=>togglePause()); btnRestart?.addEventListener('click', ()=>restart()); btnMute?.addEventListener('click', ()=>toggleMute());
-let paused=false; function togglePause(){ paused=!paused; if(btnPause) btnPause.textContent=paused?'▶︎':'⏸︎'; }
+function togglePause(){
+  if(!paused){
+    paused = true;
+    if(state===State.PLAY) pausedAt = performance.now();
+    if(btnPause) btnPause.textContent='▶︎';
+  } else {
+    paused = false;
+    if(state===State.PLAY && pausedAt){ pausedAccum += performance.now() - pausedAt; pausedAt = 0; }
+    if(btnPause) btnPause.textContent='⏸︎';
+  }
+}
 
 // ---------- World ----------
 let cameraY=0; const clouds=[];
@@ -140,7 +152,7 @@ function triggerPop(){ const bx=player.x, by=player.y - player.balloonRadius*2.2
 
 // ---------- Loop ----------
 let last=performance.now(); startClouds();
-function restart(){ state=State.INTRO; player=makePlayer(); crows.length=0; popParts.length=0; nextCrow=1800; difficulty=0; introT=0; explodeT=0; cameraY=0; startClouds(); startTime=performance.now(); elapsed=0; const sb=document.getElementById('startBanner'); if(sb) sb.style.display='flex'; }
+function restart(){ state=State.INTRO; player=makePlayer(); crows.length=0; popParts.length=0; nextCrow=1800; difficulty=0; introT=0; explodeT=0; cameraY=0; startClouds(); startTime=performance.now(); elapsed=0; paused=false; pausedAt=0; pausedAccum=0; if(btnPause) btnPause.textContent='⏸︎'; const sb=document.getElementById('startBanner'); if(sb) sb.style.display='flex'; }
 let introT=0;
 function update(dt){
   dt = finiteOr(dt, 0); cameraY = finiteOr(cameraY, 0); skyTime += dt;
@@ -154,12 +166,12 @@ function update(dt){
     const targetX = canvas.width*0.5; player.x += (targetX - player.x) * Math.min(1, 6*dt);
     const targetY = finiteOr(cameraY,0) + canvas.height*0.5; const dy=targetY - player.y; const speed=220, maxStep=speed*dt;
     if(Math.abs(dy) > 2) player.y += Math.sign(dy) * Math.min(Math.abs(dy), maxStep); else player.y = targetY;
-    if (Math.abs(player.y - targetY) <= 2 && Math.abs(player.x - targetX) <= 2) { state=State.PLAY; const sb=document.getElementById('startBanner'); if(sb) sb.style.display='none'; initAudio(); startTime=performance.now(); elapsed=0; nextCrow=1800; }
+    if (Math.abs(player.y - targetY) <= 2 && Math.abs(player.x - targetX) <= 2) { state=State.PLAY; const sb=document.getElementById('startBanner'); if(sb) sb.style.display='none'; initAudio(); startTime=performance.now(); elapsed=0; paused=false; pausedAt=0; pausedAccum=0; nextCrow=1800; }
     return;
   }
 
   if(state===State.PLAY){
-    elapsed=(performance.now()-startTime)/1000; difficulty=Math.min(12, elapsed*0.2);
+    elapsed=(performance.now()-startTime - pausedAccum)/1000; difficulty=Math.min(12, elapsed*0.2);
     const left=keys.ArrowLeft, right=keys.ArrowRight, up=keys.ArrowUp, down=keys.ArrowDown;
     player.vx=0; player.vy=GRAVITY; if(left){player.vx-=player.speed; player.facing=-1;} if(right){player.vx+=player.speed; player.facing=1;} if(up){player.vy-=180;} if(down){player.vy+=180;}
     player.x+=player.vx*dt; player.y+=player.vy*dt;

@@ -11,19 +11,20 @@
   .hud { background: rgba(0,0,0,.45); border: 2px solid #0ff; padding:6px 10px; border-radius: 10px; box-shadow: 0 0 10px #0ff8; pointer-events:auto; }
   button { cursor:pointer; background:#ff7a00; color:#000; border:2px solid #000; border-radius:10px; padding:6px 10px; font-weight:700; box-shadow:0 2px 0 #000; }
   button:active { transform: translateY(1px); box-shadow:0 1px 0 #000; }
-  #touch { position: fixed; inset: auto 0 10px 0; display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; padding: 0 10px; pointer-events: none; }
-  #touch button { pointer-events:auto; opacity:.85; font-size:18px; }
-  #touch .wide { grid-column: span 3; }
-  #tip { position: fixed; left:50%; transform:translateX(-50%); bottom: 70px; background: rgba(255,0,255,.15); border:2px solid #ff00ff; padding:6px 10px; border-radius:10px; font-size:14px; }
-  #warn { position: fixed; left:50%; transform:translateX(-50%); top: 10px; background: rgba(255,122,0,.15); border:2px solid #ff7a00; padding:6px 10px; border-radius:10px; font-size:12px; display:none; }
   canvas { display:block; width:100vw; height:100vh; }
   input[type=file]{ display:none; }
+  #startBanner{ position:fixed; inset:0; display:flex; align-items:center; justify-content:center; pointer-events:none; }
+  #startBanner .bannerBox{ pointer-events:auto; background:rgba(0,0,0,.55); border:2px solid #0ff; border-radius:14px; padding:18px 24px; text-align:center; box-shadow:0 0 20px #0ff5; }
+  #startBanner .title{ font-size:28px; font-weight:800; letter-spacing:.5px; margin-bottom:6px; }
+  #startBanner .subtitle{ font-size:16px; opacity:.9; }
+  #warn { position: fixed; left:50%; transform:translateX(-50%); top: 10px; background: rgba(255,122,0,.15); border:2px solid #ff7a00; padding:6px 10px; border-radius:10px; font-size:12px; display:none; }
+  #btnLoad, #btnExport { display:none !important; }
 </style>
 </head>
 <body>
 <canvas id="game"></canvas>
 
-<!-- Sprite embebido (placeholder 1x1). Al exportar, se reemplaza por tu PNG en data URI -->
+<!-- Placeholder embebido; si existe sprite/dino.png se cargará automáticamente -->
 <img id="playerSprite" alt="player" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8Xw8AAs8B7z3q9i0AAAAASUVORK5CYII=" style="display:none" />
 
 <div id="ui">
@@ -41,22 +42,16 @@
   </div>
 </div>
 
-<div id="touch">
-  <button id="left" aria-label="Left">⬅️</button>
-  <button id="up" aria-label="Up">⬆️</button>
-  <button id="right" aria-label="Right">➡️</button>
-  <button id="down" class="wide" aria-label="Down">⬇️</button>
-</div>
-
-<div id="warn">No sprite cargado — usando placeholder. Arrastrá tu PNG o tocá 🖼️ Sprite.</div>
-<div id="tip">Flechas para moverte. Ascenso constante — ¡evitá los cuervos! P: pausa • M: mute • R: reiniciar</div>
+<div id="startBanner"><div class="bannerBox"><div class="title">Sobrevive a los cuervos</div><div class="subtitle">↑, ↓, ←, → para moverse</div></div></div>
+<div id="warn">No sprite cargado — usando placeholder. Arrastrá tu PNG o pegalo (Ctrl/Cmd+V).<\/div>
 
 <script>
 (()=>{
 // ---------- Helpers ----------
 const finiteOr = (v, fb=0)=> Number.isFinite(v) ? v : fb;
-const warn = (msg)=>{ const el=document.getElementById('warn'); el.textContent=msg; el.style.display='block'; };
-const hideWarn = ()=>{ document.getElementById('warn').style.display='none'; };
+const warnEl = document.getElementById('warn');
+const showWarn = (msg)=>{ if(!warnEl) return; warnEl.textContent=msg; warnEl.style.display='block'; };
+const hideWarn = ()=>{ if(!warnEl) return; warnEl.style.display='none'; };
 
 // ---------- Canvas ----------
 const canvas = document.getElementById('game');
@@ -65,81 +60,65 @@ const DPR = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
 function resize(){ canvas.width = Math.floor((window.innerWidth||1) * DPR); canvas.height = Math.floor((window.innerHeight||1) * DPR); }
 addEventListener('resize', resize); resize();
 
-// ---------- Colors ----------
+// ---------- Colors & constants ----------
 const CYAN='#00ffff', MAGENTA='#ff00ff', ORANGE='#ff7a00', BLACK='#000', WHITE='#fff';
+const BG_SCROLL = -12; // px/s (negativo = el fondo baja)
+const GRAVITY = 60;    // px/s (positivo = el globo baja)
 
-// ---------- Sprite ----------
+// --- Ciclo de color del cielo ---
+let skyTime = 0; // segundos acumulados
+function hexToRgb(hex){ if(!hex) return [0,0,0]; if(hex[0]==='#') hex=hex.slice(1); if(hex.length===3){ hex = hex.split('').map(ch=>ch+ch).join(''); } const r=parseInt(hex.slice(0,2),16)||0; const g=parseInt(hex.slice(2,4),16)||0; const b=parseInt(hex.slice(4,6),16)||0; return [r,g,b]; }
+function rgbToHex(r,g,b){ const to=n=>Math.max(0,Math.min(255,Math.round(n))).toString(16).padStart(2,'0'); return '#'+to(r)+to(g)+to(b); }
+function lerpHex(a,b,t){ const [r1,g1,b1]=hexToRgb(a), [r2,g2,b2]=hexToRgb(b); return rgbToHex(r1+(r2-r1)*t, g1+(g2-g1)*t, b1+(b2-b1)*t); }
+
+// ---------- Sprites (jugador) ----------
 const playerImg = document.getElementById('playerSprite');
-const SPRITE_SCALE = 0.6 * DPR; // más grande para verlo claro
-let spriteTime=0, useFallbackSprite=true;
-function checkSprite(){
-  const iw = playerImg.naturalWidth|0, ih = playerImg.naturalHeight|0;
-  useFallbackSprite = !(iw>=16 && ih>=16);
-  if(useFallbackSprite) warn('No sprite cargado — usando placeholder. Arrastrá tu PNG o tocá 🖼️ Sprite.');
-  else hideWarn();
-}
-// cargar desde localStorage si ya se guardó
-const storedSprite = localStorage.getItem('bt_sprite_datauri');
-if(storedSprite) playerImg.src = storedSprite;
-playerImg.onload = checkSprite; checkSprite();
+const SPRITE_SCALE = 0.6 * DPR;
+let spriteTime=0;
+(function initPlayerSprite(){
+  const fallback = playerImg.getAttribute('src');
+  function setSpriteFromFile(file){
+    if(!file) return;
+    const r = new FileReader();
+    r.onload = ()=>{ playerImg.src = r.result; hideWarn(); };
+    r.readAsDataURL(file);
+  }
+  // Drag & drop y pegar desde el portapapeles
+  addEventListener('dragover', e=>{ e.preventDefault(); });
+  addEventListener('drop', e=>{ e.preventDefault(); const f=e.dataTransfer?.files?.[0]; if(f) setSpriteFromFile(f); });
+  addEventListener('paste', e=>{ const f=[...(e.clipboardData?.files||[])][0]; if(f) setSpriteFromFile(f); });
+  // Botón Sprite
+  const fileInput = document.getElementById('fileInput');
+  const btnLoad = document.getElementById('btnLoad');
+  btnLoad?.addEventListener('click', ()=> fileInput?.click());
+  fileInput?.addEventListener('change', ()=>{ const f=fileInput.files?.[0]; if(f) setSpriteFromFile(f); });
+  // Intento de ruta relativa + cache-bust, con fallback y aviso
+  playerImg.onerror = ()=>{ playerImg.src = fallback; showWarn('No se encontró sprite/dino.png — usando placeholder.'); };
+  playerImg.src = `sprite/dino.png?cb=${Date.now()}`;
+})();
 
-// cargar sprite (botón / drag&drop / paste)
-function setSpriteFromFile(file){
-  const r=new FileReader();
-  r.onload=()=>{ playerImg.src=r.result; }; // data URI
-  r.readAsDataURL(file);
-}
-addEventListener('dragover', e=>{ e.preventDefault(); });
-addEventListener('drop', e=>{ e.preventDefault(); const f=e.dataTransfer.files?.[0]; if(f) setSpriteFromFile(f); });
-const fileInput = document.getElementById('fileInput');
-document.getElementById('btnLoad').onclick = ()=> fileInput.click();
-fileInput.onchange = ()=>{ const f=fileInput.files?.[0]; if(f) setSpriteFromFile(f); };
-addEventListener('paste', e=>{ const f=[...(e.clipboardData?.files||[])][0]; if(f) setSpriteFromFile(f); });
-// persistir sprite en localStorage al cargar
-playerImg.addEventListener('load', ()=>{
-  try{ if(playerImg.src.startsWith('data:')) localStorage.setItem('bt_sprite_datauri', playerImg.src); }catch(e){}
-});
-
-// exportar HTML con el sprite embebido
-document.getElementById('btnExport').onclick = ()=>{
-  const dataUri = localStorage.getItem('bt_sprite_datauri') || playerImg.src;
-  const html = buildExportHTML(dataUri);
-  const blob = new Blob([html], {type:'text/html;charset=utf-8'});
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url; a.download = 'balloon_traveler_single.html';
-  document.body.appendChild(a); a.click(); a.remove();
-  setTimeout(()=>URL.revokeObjectURL(url), 2000);
-};
+// ---------- Sprites de cuervos (opcionales) ----------
+let crowSpritesReady=false; const crowImgs=[]; const CROW_SOURCES=['sprite/cuervo1.png','sprite/cuervo2.png'];
+(function preloadCrows(){ let loaded=0; for(const src of CROW_SOURCES){ const im=new Image(); im.onload=()=>{ loaded++; if(loaded===CROW_SOURCES.length) crowSpritesReady=true; }; im.onerror=()=>{}; im.src=src; crowImgs.push(im);} })();
 
 // ---------- Input ----------
 const keys = { ArrowUp:false, ArrowDown:false, ArrowLeft:false, ArrowRight:false };
 addEventListener('keydown', e=>{ if(e.code in keys){ keys[e.code]=true; e.preventDefault(); } if(e.code==='KeyP'){togglePause();} if(e.code==='KeyM'){toggleMute();} if(e.code==='KeyR'){restart();} });
 addEventListener('keyup', e=>{ if(e.code in keys){ keys[e.code]=false; e.preventDefault(); } });
-const touches = { left:false, right:false, up:false, down:false };
-const bindHold = (el, prop)=>{ const on=()=>touches[prop]=true, off=()=>touches[prop]=false; el.addEventListener('pointerdown', e=>{e.preventDefault();on();el.setPointerCapture?.(e.pointerId);}); ['pointerup','pointercancel','pointerleave'].forEach(t=>el.addEventListener(t,off)); };
-bindHold(document.getElementById('left'),'left'); bindHold(document.getElementById('right'),'right'); bindHold(document.getElementById('up'),'up'); bindHold(document.getElementById('down'),'down');
 
 // ---------- Audio ----------
-let audioReady=false, audioMuted=false; let ac, master;
+let audioReady=false, audioMuted=false; let ac, master; let musicTimer=null;
 function initAudio(){ if(audioReady) return; ac = new (window.AudioContext||window.webkitAudioContext)(); master = ac.createGain(); master.gain.value = 0.12; master.connect(ac.destination); audioReady=true; makeMusic(); }
-function toggleMute(){ audioMuted=!audioMuted; if(master) master.gain.value = audioMuted?0:0.12; btnMute.textContent = audioMuted?'🔇':'🔈'; }
-function makeMusic(){
-  const bpm=128, beat=60/bpm, scale=[0,2,4,7,9];
-  function note(t,semi,d=beat*0.45,type='sine',v=0.12){ const o=ac.createOscillator(), g=ac.createGain(); o.type=type; o.frequency.value = 220*Math.pow(2, semi/12); g.gain.value=v; g.gain.setValueAtTime(v,t); g.gain.exponentialRampToValueAtTime(0.0001,t+d); o.connect(g); g.connect(master); o.start(t); o.stop(t+d); }
-  function hat(t){ const n=ac.createBufferSource(), b=ac.createBuffer(1, 2205, ac.sampleRate), d=b.getChannelData(0); for(let i=0;i<d.length;i++) d[i]=(Math.random()*2-1)*Math.pow(1 - i/d.length, 8); n.buffer=b; const g=ac.createGain(); g.gain.value=0.08; n.connect(g); g.connect(master); n.start(t); }
-  function schedule(){ const base=ac.currentTime+0.05; for(let i=0;i<8;i++){ const t=base+i*beat*0.5; hat(t); if(i%2===0) hat(t+beat*0.25); const deg=scale[i%scale.length]; note(t,deg+12,beat*0.35,'triangle',0.10); if(i%4===0) note(t,deg,beat*0.5,'square',0.06); } }
-  schedule(); setInterval(()=>{ if(audioMuted||ac?.state!=='running') return; schedule(); }, beat*1000*4);
-}
+function toggleMute(){ audioMuted=!audioMuted; if(master) master.gain.value = audioMuted?0:0.12; const btn=document.getElementById('btnMute'); if(btn) btn.textContent = audioMuted?'🔇':'🔈'; }
+function makeMusic(){ const bpm=128, beat=60/bpm, scale=[0,2,4,7,9]; function note(t,semi,d=beat*0.45,type='sine',v=0.12){ const o=ac.createOscillator(), g=ac.createGain(); o.type=type; o.frequency.value = 220*Math.pow(2, semi/12); g.gain.value=v; g.gain.setValueAtTime(v,t); g.gain.exponentialRampToValueAtTime(0.0001,t+d); o.connect(g); g.connect(master); o.start(t); o.stop(t+d); } function hat(t){ const n=ac.createBufferSource(), b=ac.createBuffer(1, 2205, ac.sampleRate), d=b.getChannelData(0); for(let i=0;i<d.length;i++) d[i]=(Math.random()*2-1)*Math.pow(1 - i/d.length, 8); n.buffer=b; const g=ac.createGain(); g.gain.value=0.08; n.connect(g); n.connect(master); n.start(t); } function schedule(){ const base=ac.currentTime+0.05; for(let i=0;i<8;i++){ const t=base+i*beat*0.5; hat(t); if(i%2===0) hat(t+beat*0.25); const deg=scale[i%scale.length]; note(t,deg+12,beat*0.35,'triangle',0.10); if(i%4===0) note(t,deg,beat*0.5,'square',0.06); } } schedule(); if(musicTimer) clearInterval(musicTimer); musicTimer=setInterval(()=>{ if(audioMuted||ac?.state!=='running') return; schedule(); }, beat*1000*4); }
 
 // ---------- Game state ----------
 const State={INTRO:0,PLAY:1,FALL:2,GAMEOVER:3}; let state=State.INTRO;
 let startTime=performance.now(), elapsed=0, best=parseFloat(localStorage.getItem('bt_best')||'0')||0;
-const timerEl=document.getElementById('timer'); const bestEl=document.getElementById('best');
-bestEl.textContent='🏆 '+best.toFixed(1)+'s';
-const btnPause=document.getElementById('btnPause'); const btnMute=document.getElementById('btnMute'); const btnRestart=document.getElementById('btnRestart');
-btnPause.onclick=()=>togglePause(); btnRestart.onclick=()=>restart(); btnMute.onclick=()=>toggleMute();
-let paused=false; function togglePause(){ paused=!paused; btnPause.textContent=paused?'▶︎':'⏸︎'; }
+const timerEl=document.getElementById('timer'); const bestEl=document.getElementById('best'); if(bestEl) bestEl.textContent='🏆 '+best.toFixed(1)+'s';
+const btnPause=document.getElementById('btnPause'); const btnRestart=document.getElementById('btnRestart'); const btnMute=document.getElementById('btnMute');
+btnPause?.addEventListener('click', ()=>togglePause()); btnRestart?.addEventListener('click', ()=>restart()); btnMute?.addEventListener('click', ()=>toggleMute());
+let paused=false; function togglePause(){ paused=!paused; if(btnPause) btnPause.textContent=paused?'▶︎':'⏸︎'; }
 
 // ---------- World ----------
 let cameraY=0; const clouds=[];
@@ -147,214 +126,141 @@ function startClouds(){ clouds.length=0; for(let i=0;i<30;i++) clouds.push(newCl
 function newCloud(initial=false){ const w=canvas.width||1,h=canvas.height||1; return {x:Math.random()*w, y:(initial?Math.random()*h:(-50-Math.random()*200))+finiteOr(cameraY,0), r:20+Math.random()*80, speed:20+Math.random()*60, tint:Math.random()<0.5?CYAN:MAGENTA, alpha:0.15+Math.random()*0.25}; }
 
 // ---------- Player ----------
-function makePlayer(){ const x=canvas.width*0.4, y=canvas.height-60; return {x, y:y+finiteOr(cameraY,0), vx:0, vy:-30, speed:180, balloonRadius:18*DPR, grabbed:false, facing:1}; }
+function makePlayer(){ const x=canvas.width*0.5, y=canvas.height+40; return {x, y:y+finiteOr(cameraY,0), vx:0, vy:0, speed:180, balloonRadius:18*DPR, grabbed:false, facing:1, popped:false}; }
 let player=makePlayer();
-
-// ---------- Intro ----------
-let introT=0; const cart={ x:()=>canvas.width*0.7, y:()=>canvas.height-60+finiteOr(cameraY,0) };
 
 // ---------- Crows ----------
 const crows=[];
-function spawnCrow(){
-  const w = canvas.width||1, h = canvas.height||1;
-  const offset = 50; // spawn fully outside
-  const cy = finiteOr(cameraY,0);
-  const side = Math.floor(Math.random()*4); // 0=L,1=R,2=T,3=B
-  let x,y;
-  if(side===0){ // left edge
-    x = -offset; y = Math.random()*h + cy;
-  } else if(side===1){ // right edge
-    x = w + offset; y = Math.random()*h + cy;
-  } else if(side===2){ // top edge
-    x = Math.random()*w; y = cy - offset;
-  } else { // bottom edge
-    x = Math.random()*w; y = cy + h + offset;
-  }
+function spawnCrow(){ const w=canvas.width||1, h=canvas.height||1; const off=50, cy=finiteOr(cameraY,0); const side=Math.floor(Math.random()*4); let x,y; if(side===0){ x=-off; y=Math.random()*h+cy; } else if(side===1){ x=w+off; y=Math.random()*h+cy; } else if(side===2){ x=Math.random()*w; y=cy-off; } else { x=Math.random()*w; y=cy+h+off; } const dx=player.x-x, dy=player.y-y; const len=Math.hypot(dx,dy)||1; const speed=90+Math.random()*140 + difficulty*10; const vx=(dx/len)*speed, vy=(dy/len)*speed; const wait=0.10+Math.random()*0.45; crows.push({x,y,vx,vy,r:27*DPR,t:0,wait}); } // r aumentado 50%
+let nextCrow=0, difficulty=0; let explodeT=0; let popParts=[];
 
-  // Aim at player's current position at spawn time, then fly straight
-  const px = player.x, py = player.y;
-  const dx = px - x, dy = py - y;
-  const len = Math.hypot(dx, dy) || 1;
-  const speed = 90 + Math.random()*140 + difficulty*10; // keep same base speed
-  const vx = (dx/len) * speed;
-  const vy = (dy/len) * speed;
-
-  // Small random start delay to de-sync entries
-  const wait = 0.10 + Math.random()*0.45; // seconds
-
-  crows.push({x,y,vx,vy,r:14*DPR,t:0,wait});
-}
-let nextCrow=0, difficulty=0; let explodeT=0;
-
-// ---------- Utils ----------
-function fmtTime(s){ return s.toFixed(1)+'s'; }
-function clamp(v,min,max){ return v<min?min:v>max?max:v; }
+// ---------- Effects ----------
+function sfxPop(){ try{ if(!audioReady) return; const sr=ac.sampleRate, dur=0.15; const b=ac.createBuffer(1, (sr*dur)|0, sr), d=b.getChannelData(0); for(let i=0;i<d.length;i++){ const t=i/sr; d[i]=(Math.random()*2-1)*Math.pow(1 - t/dur, 4); } const n=ac.createBufferSource(); n.buffer=b; const g=ac.createGain(); g.gain.value=0.4; n.connect(g); g.connect(master); n.start(); g.gain.setValueAtTime(0.4, ac.currentTime); g.gain.exponentialRampToValueAtTime(0.0001, ac.currentTime+dur);}catch(e){} }
+function triggerPop(){ const bx=player.x, by=player.y - player.balloonRadius*2.2; player.popped=true; sfxPop(); popParts=[]; for(let i=0;i<36;i++){ const a=Math.random()*Math.PI*2, sp=80+Math.random()*220; popParts.push({x:bx,y:by,vx:Math.cos(a)*sp,vy:Math.sin(a)*sp,age:0,life:0.5+Math.random()*0.5,size:1.5*DPR+Math.random()*2.5*DPR,color:(i%2?MAGENTA:ORANGE)}); } }
 
 // ---------- Loop ----------
 let last=performance.now(); startClouds();
-function restart(){ state=State.INTRO; player=makePlayer(); crows.length=0; nextCrow=0; difficulty=0; introT=0; explodeT=0; cameraY=0; startClouds(); startTime=performance.now(); elapsed=0; }
+function restart(){ state=State.INTRO; player=makePlayer(); crows.length=0; popParts.length=0; nextCrow=1800; difficulty=0; introT=0; explodeT=0; cameraY=0; startClouds(); startTime=performance.now(); elapsed=0; const sb=document.getElementById('startBanner'); if(sb) sb.style.display='flex'; }
+let introT=0;
 function update(dt){
-  dt = finiteOr(dt, 0); cameraY = finiteOr(cameraY, 0);
+  dt = finiteOr(dt, 0); cameraY = finiteOr(cameraY, 0); skyTime += dt;
+  // Fondo baja lineal
+  cameraY += BG_SCROLL * dt;
+  // Nubes
+  for(let i=0;i<clouds.length;i++) clouds[i].y += clouds[i].speed * dt;
 
   if(state===State.INTRO){
-    introT+=dt; const targetX=cart.x()-50;
-    player.vx=(targetX-player.x)*2; player.vx=clamp(player.vx,-220,220);
-    player.x+=player.vx*dt; player.facing=Math.sign(player.vx)||1;
-    cameraY-=10*dt;
-    if(!player.grabbed && Math.abs(player.x-targetX)<6) player.grabbed=true;
-    if(player.grabbed){ player.vy=-30; player.y+=player.vy*dt; cameraY+=player.vy*dt; }
-    if(introT>3){
-      // Transition to PLAY: ensure player starts safely inside bounds (to avoid instant border death)
-      const minX=player.balloonRadius+10, maxX=canvas.width-player.balloonRadius-10;
-      const minY=finiteOr(cameraY,0)+40, maxY=finiteOr(cameraY,0)+canvas.height-60;
-      player.x = clamp(player.x, minX+1, maxX-1);
-      player.y = clamp(player.y, minY+1, maxY-1);
-      state=State.PLAY; initAudio();
-    }
+    // El personaje aparece desde abajo y se posa en el centro
+    const targetX = canvas.width*0.5; player.x += (targetX - player.x) * Math.min(1, 6*dt);
+    const targetY = finiteOr(cameraY,0) + canvas.height*0.5; const dy=targetY - player.y; const speed=220, maxStep=speed*dt;
+    if(Math.abs(dy) > 2) player.y += Math.sign(dy) * Math.min(Math.abs(dy), maxStep); else player.y = targetY;
+    if (Math.abs(player.y - targetY) <= 2 && Math.abs(player.x - targetX) <= 2) { state=State.PLAY; const sb=document.getElementById('startBanner'); if(sb) sb.style.display='none'; initAudio(); startTime=performance.now(); elapsed=0; nextCrow=1800; }
+    return;
   }
 
   if(state===State.PLAY){
-    elapsed=(performance.now()-startTime)/1000;
-    difficulty=Math.min(12, elapsed*0.2);
-    const left=keys.ArrowLeft||touches.left, right=keys.ArrowRight||touches.right, up=keys.ArrowUp||touches.up, down=keys.ArrowDown||touches.down;
-    player.vx=0; player.vy=-30;
-    if(left){player.vx-=player.speed; player.facing=-1;}
-    if(right){player.vx+=player.speed; player.facing=1;}
-    if(up){player.vy-=80;}
-    if(down){player.vy+=120;}
+    elapsed=(performance.now()-startTime)/1000; difficulty=Math.min(12, elapsed*0.2);
+    const left=keys.ArrowLeft, right=keys.ArrowRight, up=keys.ArrowUp, down=keys.ArrowDown;
+    player.vx=0; player.vy=GRAVITY; if(left){player.vx-=player.speed; player.facing=-1;} if(right){player.vx+=player.speed; player.facing=1;} if(up){player.vy-=180;} if(down){player.vy+=180;}
     player.x+=player.vx*dt; player.y+=player.vy*dt;
     const minX=player.balloonRadius+10, maxX=canvas.width-player.balloonRadius-10, minY=finiteOr(cameraY,0)+40, maxY=finiteOr(cameraY,0)+canvas.height-60;
-    player.x=clamp(player.x,minX,maxX); player.y=clamp(player.y,minY,maxY);
-    // touching any screen margin is instant death
+    player.x= Math.max(minX, Math.min(maxX, player.x)); player.y= Math.max(minY, Math.min(maxY, player.y));
     if(player.x<=minX || player.x>=maxX || player.y<=minY || player.y>=maxY){ state=State.FALL; explodeT=0; }
-    cameraY+=player.vy*dt;
 
-    nextCrow-=dt*1000; const baseInterval=1100-difficulty*60;
-    if(nextCrow<=0){ spawnCrow(); nextCrow=baseInterval*(0.6+Math.random()*0.8); }
-    for(const c of crows){
-      c.t += dt;
-      if(c.wait>0){ c.wait -= dt; }
-      else { c.x += c.vx*dt; c.y += c.vy*dt; }
-    }
-    for(let i=crows.length-1;i>=0;i--){
-      const c=crows[i];
-      const off = 60; // remove as soon as fully outside
-      if(c.y < finiteOr(cameraY,0)-off || c.y > finiteOr(cameraY,0)+canvas.height+off || c.x < -off || c.x > canvas.width+off) {
-        crows.splice(i,1);
-      }
-    }
-    for(const c of crows){
-      const dx=c.x-player.x, dy=c.y-(player.y-player.balloonRadius*2.2);
-      const rr=(c.r+player.balloonRadius);
-      if(dx*dx + dy*dy < rr*rr){ state=State.FALL; explodeT=0; break; }
-    }
-    timerEl.textContent='⏱️ '+fmtTime(elapsed);
+    // Spawn de cuervos
+    nextCrow-=dt*1000; const easeT=Math.min(1, Math.max(0, elapsed/20)); const spawnMult = 2.5 - 1.5*easeT; let baseInterval=(1100 - difficulty*60) * spawnMult;
+    if(nextCrow<=0){ const maxCrows=Math.min(10, 2 + Math.floor(elapsed/12)); if(crows.length < maxCrows) spawnCrow(); nextCrow = baseInterval*(0.6+Math.random()*0.8); }
+    for(const c of crows){ c.t += dt; if(c.wait>0){ c.wait -= dt; } else { c.x += c.vx*dt; c.y += c.vy*dt; } }
+    for(let i=crows.length-1;i>=0;i--){ const c=crows[i], off=60; if(c.y < finiteOr(cameraY,0)-off || c.y > finiteOr(cameraY,0)+canvas.height+off || c.x < -off || c.x > canvas.width+off) crows.splice(i,1); }
+    for(const c of crows){ if(c.wait>0) continue; const onScreen = c.x>=-20 && c.x<=canvas.width+20 && c.y>=finiteOr(cameraY,0)-20 && c.y<=finiteOr(cameraY,0)+canvas.height+20; if(!onScreen) continue; const dx=c.x-player.x, dy=c.y-(player.y-player.balloonRadius*2.2); const rr=(c.r+player.balloonRadius); if(dx*dx + dy*dy < rr*rr){ state=State.FALL; player.vy=50; if(!player.popped) triggerPop(); explodeT=0; break; } }
+    if(timerEl) timerEl.textContent='⏱️ '+elapsed.toFixed(1)+'s';
+    return;
   }
 
   if(state===State.FALL){
-    explodeT+=dt*1000; player.vy+=400*dt; player.y+=player.vy*dt; cameraY+=(player.vy*dt)*0.5;
-    if(player.y>finiteOr(cameraY,0)+canvas.height+80){
-      state=State.GAMEOVER; best=Math.max(best,elapsed); localStorage.setItem('bt_best',best); document.getElementById('best').textContent='🏆 '+fmtTime(best);
-    }
+    explodeT+=dt*1000; player.vy+=400*dt; player.y+=player.vy*dt;
+    for(let i=popParts.length-1;i>=0;i--){ const p=popParts[i]; p.age+=dt; p.vx*=0.98; p.vy+=300*dt; p.x+=p.vx*dt; p.y+=p.vy*dt; if(p.age>p.life) popParts.splice(i,1); }
+    if(player.y>finiteOr(cameraY,0)+canvas.height+80){ state=State.GAMEOVER; best=Math.max(best,elapsed); localStorage.setItem('bt_best',best); if(bestEl) bestEl.textContent='🏆 '+best.toFixed(1)+'s'; }
+    return;
   }
 }
 
 function render(){
   const w = canvas.width||1, h = canvas.height||1; const cy = finiteOr(cameraY, 0);
-  const y1 = finiteOr((cy % h) - h, 0), y2 = finiteOr((cy % h) + h, h);
+  // Fondo (gradient cíclico)
+  let y1 = finiteOr(cy - h, -h), y2 = finiteOr(cy + h, h); if(y1===y2) y2=y1+1;
   const g = ctx.createLinearGradient(0, y1, 0, y2);
-  g.addColorStop(0,'#003b49'); g.addColorStop(0.5,CYAN); g.addColorStop(1,MAGENTA);
+  const loopSec = 24; const t = 0.5 * (1 - Math.cos((skyTime/loopSec)*2*Math.PI)); const midCol = lerpHex(CYAN, MAGENTA, t); const botCol = lerpHex(MAGENTA, CYAN, t);
+  g.addColorStop(0,'#003b49'); g.addColorStop(0.5, midCol); g.addColorStop(1, botCol);
   ctx.fillStyle=g; ctx.fillRect(0,0,w,h);
-
-  ctx.globalAlpha = 0.15; ctx.fillStyle = WHITE;
-  for(let i=0;i<40;i++){ ctx.fillRect((i*83)%w, (Math.floor((i*97 + cy*0.05))%h), 2,2); }
-  ctx.globalAlpha = 1;
-
-  for(let i=0;i<clouds.length;i++){
-    const c = clouds[i]; c.y += c.speed * 0.1; if(c.y - cy > h + 60) clouds[i] = newCloud(false);
-    ctx.beginPath(); const puffs = 3 + (c.r/30|0);
-    for(let k=0;k<puffs;k++){ const px=c.x + Math.cos(k*2*Math.PI/puffs)*c.r*0.9, py=c.y + Math.sin(k*2*Math.PI/puffs)*c.r*0.6; ctx.moveTo(px+c.r, py); ctx.arc(px, py, c.r*0.7, 0, Math.PI*2); }
-    ctx.fillStyle = c.tint; ctx.globalAlpha = c.alpha; ctx.fill(); ctx.globalAlpha = 1;
-  }
-
-  if(state===State.INTRO){
-    const cx=cart.x(), cyy=cart.y();
-    ctx.fillStyle=ORANGE; ctx.fillRect(0,(canvas.height-30)+cy, w, 6);
-    ctx.fillStyle=BLACK; ctx.fillRect(0,(canvas.height-24)+cy, w, 40);
-    ctx.fillStyle=ORANGE; ctx.fillRect(cx-30, cyy-20, 60, 20);
-    ctx.fillStyle=BLACK; ctx.fillRect(cx-22, cyy-26, 44, 6);
-    ctx.beginPath(); ctx.arc(cx-18, cyy, 8*DPR, 0, Math.PI*2); ctx.arc(cx+18, cyy, 8*DPR, 0, Math.PI*2); ctx.fill();
-    for(let i=0;i<6;i++){ const bx=cx-40+i*15, by=cyy-50-i*4; drawBalloon(bx,by,10*DPR,i%2?MAGENTA:CYAN); }
-  }
-
-  for(const c of crows) drawCrow(c);
+  // Estrellas
+  ctx.globalAlpha = 0.15; ctx.fillStyle = WHITE; for(let i=0;i<40;i++){ ctx.fillRect((i*83)%w, (Math.floor((i*97 + cy*0.05))%h), 2,2); } ctx.globalAlpha = 1;
+  // Mundo
+  ctx.save(); ctx.translate(0, -cy);
+  // Nubes
+  for(let i=0;i<clouds.length;i++){ const c=clouds[i]; if(c.y - cy > h + 60) { clouds[i] = newCloud(false); continue; } ctx.beginPath(); const puffs = 3 + (c.r/30|0); for(let k=0;k<puffs;k++){ const px=c.x + Math.cos(k*2*Math.PI/puffs)*c.r*0.9, py=c.y + Math.sin(k*2*Math.PI/puffs)*c.r*0.6; ctx.moveTo(px+c.r, py); ctx.arc(px, py, c.r*0.7, 0, Math.PI*2); } ctx.fillStyle = c.tint; ctx.globalAlpha = c.alpha; ctx.fill(); ctx.globalAlpha = 1; }
+  // Cuervos
+  for(const c of crows){ if(c.wait<=0) drawCrow(c); }
+  // Jugador
   drawPlayer(player);
+  // Explosión
+  for(const prt of popParts){ const a = Math.max(0, 1 - prt.age/prt.life); ctx.globalAlpha=a; ctx.fillStyle=prt.color; ctx.beginPath(); ctx.arc(prt.x, prt.y, prt.size, 0, Math.PI*2); ctx.fill(); } ctx.globalAlpha=1;
+  if(player.popped && explodeT < 600){ const bx=player.x, by=player.y - player.balloonRadius*2.2; const tt=explodeT/600; const rr=player.balloonRadius*(1 + tt*2.5); ctx.globalAlpha = 1 - tt; ctx.strokeStyle = CYAN; ctx.lineWidth = 3*DPR*(1-tt); ctx.beginPath(); ctx.arc(bx, by, rr, 0, Math.PI*2); ctx.stroke(); ctx.globalAlpha=1; }
   if(state===State.GAMEOVER) drawGameOver();
-}
-
-function drawBalloon(x,y,r,color){
-  ctx.strokeStyle=ORANGE; ctx.lineWidth=2*DPR; ctx.beginPath(); ctx.moveTo(x,y+r); ctx.lineTo(x,y+r+30*DPR); ctx.stroke();
-  ctx.fillStyle=color; ctx.beginPath(); ctx.ellipse(x,y,r*1.0,r*1.2,0,0,Math.PI*2); ctx.fill();
-  ctx.globalAlpha=0.6; ctx.fillStyle='#fff'; ctx.beginPath(); ctx.ellipse(x-r*0.3,y-r*0.2,r*0.25,r*0.35,0,0,Math.PI*2); ctx.fill(); ctx.globalAlpha=1;
-}
-function drawCrow(c){
-  ctx.save(); ctx.translate(c.x,c.y); const a=Math.atan2(c.vy,c.vx); ctx.rotate(a);
-  ctx.fillStyle=BLACK; ctx.beginPath(); ctx.moveTo(-c.r*0.8,-c.r*0.6); ctx.quadraticCurveTo(c.r*0.2,-c.r*0.2,c.r*0.9,0); ctx.quadraticCurveTo(c.r*0.2,c.r*0.2,-c.r*0.8,c.r*0.6); ctx.closePath(); ctx.fill();
-  ctx.fillStyle=ORANGE; ctx.beginPath(); ctx.moveTo(c.r*0.9,0); ctx.lineTo(c.r*1.2,-c.r*0.2); ctx.lineTo(c.r*1.2, c.r*0.2); ctx.closePath(); ctx.fill();
-  const flap=Math.sin(c.t*10)*c.r*0.7; ctx.fillStyle=BLACK; ctx.beginPath(); ctx.moveTo(-c.r*0.3,0); ctx.lineTo(-c.r*0.3,-flap*0.6); ctx.lineTo(c.r*0.2,0); ctx.closePath(); ctx.fill();
   ctx.restore();
 }
-function drawPlayer(p){
-  const bx=p.x, by=p.y - p.balloonRadius*2.2; drawBalloon(bx,by,p.balloonRadius,MAGENTA);
-  const iw=playerImg.naturalWidth|0, ih=playerImg.naturalHeight|0; const hasSprite = (iw>=16 && ih>=16);
-  const w=(hasSprite?iw:160)*SPRITE_SCALE, h=(hasSprite?ih:150)*SPRITE_SCALE;
-  spriteTime+=1/60; const bob=Math.sin(spriteTime*6)*2*DPR; const lean=Math.max(-0.15, Math.min(0.15, (p.vx||0)/300));
-  ctx.save(); ctx.translate(p.x, p.y + bob); ctx.rotate(lean); if(p.facing<0){ ctx.scale(-1,1);} const prev=ctx.imageSmoothingEnabled; ctx.imageSmoothingEnabled=false;
-  if(hasSprite){ ctx.drawImage(playerImg, -w/2, -h*0.6, w, h); }
-  else { // placeholder visible
-    ctx.fillStyle = CYAN; ctx.fillRect(-6*DPR, -4*DPR, 12*DPR, 20*DPR);
-    ctx.fillStyle = MAGENTA; ctx.fillRect(-8*DPR, 14*DPR, 4*DPR, 10*DPR); ctx.fillRect(4*DPR, 14*DPR, 4*DPR, 10*DPR);
-    ctx.fillStyle = ORANGE; ctx.beginPath(); ctx.arc(0, -8*DPR, 6*DPR, 0, Math.PI*2); ctx.fill();
+
+function drawBalloon(x,y,r,color){ ctx.strokeStyle=ORANGE; ctx.lineWidth=2*DPR; ctx.beginPath(); ctx.moveTo(x,y+r); ctx.lineTo(x,y+r+30*DPR); ctx.stroke(); ctx.fillStyle=color; ctx.beginPath(); ctx.ellipse(x,y,r*1.0,r*1.2,0,0,Math.PI*2); ctx.fill(); ctx.globalAlpha=0.6; ctx.fillStyle='#fff'; ctx.beginPath(); ctx.ellipse(x-r*0.3,y-r*0.2,r*0.25,r*0.35,0,0,Math.PI*2); ctx.fill(); ctx.globalAlpha=1; }
+
+function drawCrow(c){
+  ctx.save();
+  ctx.translate(c.x,c.y);
+  const a=Math.atan2(c.vy,c.vx); ctx.rotate(a);
+  // Reflejo: si va de derecha a izquierda, invertimos en Y para mantenerlo "derecho"
+  if(c.vx < 0) ctx.scale(1,-1);
+  if(crowSpritesReady && crowImgs.length>0 && crowImgs[0].naturalWidth){
+    const frame = Math.floor(c.t*8) % crowImgs.length;
+    const img = crowImgs[frame];
+    const iw = img.naturalWidth|0, ih = img.naturalHeight|0;
+    const w = c.r*2; const h = (iw>0 && ih>0) ? w * (ih/iw) : w;
+    const prev = ctx.imageSmoothingEnabled; ctx.imageSmoothingEnabled=false;
+    ctx.drawImage(img, -w*0.5, -h*0.5, w, h);
+    ctx.imageSmoothingEnabled = prev;
+  } else {
+    // Fallback vectorial
+    ctx.fillStyle=BLACK;
+    ctx.beginPath();
+    ctx.moveTo(-c.r*0.8,-c.r*0.6);
+    ctx.quadraticCurveTo(c.r*0.2,-c.r*0.2,c.r*0.9,0);
+    ctx.quadraticCurveTo(c.r*0.2,c.r*0.2,-c.r*0.8,c.r*0.6);
+    ctx.closePath(); ctx.fill();
+    // Pico
+    ctx.fillStyle=ORANGE; ctx.beginPath(); ctx.moveTo(c.r*0.9,0); ctx.lineTo(c.r*1.2,-c.r*0.2); ctx.lineTo(c.r*1.2, c.r*0.2); ctx.closePath(); ctx.fill();
+    // Ala
+    const flap=Math.sin(c.t*10)*c.r*0.7; ctx.fillStyle=BLACK; ctx.beginPath(); ctx.moveTo(-c.r*0.3,0); ctx.lineTo(-c.r*0.3,-flap*0.6); ctx.lineTo(c.r*0.2,0); ctx.closePath(); ctx.fill();
   }
-  ctx.imageSmoothingEnabled=prev; ctx.restore();
+  ctx.restore();
 }
-function drawGameOver(){
-  const w=canvas.width,h=canvas.height; const boxW=Math.min(420*DPR,w*0.9), boxH=180*DPR; const x=(w-boxW)/2, y=(h-boxH)/2;
-  ctx.fillStyle='rgba(0,0,0,0.6)'; ctx.fillRect(x,y,boxW,boxH); ctx.strokeStyle=CYAN; ctx.lineWidth=4*DPR; ctx.strokeRect(x,y,boxW,boxH);
-  ctx.fillStyle='#fff'; ctx.textAlign='center'; ctx.font=(24*DPR)+'px system-ui, sans-serif'; ctx.fillText('Balloon popped! You fell...', w/2, y+42*DPR);
-  ctx.fillStyle=ORANGE; ctx.font=(20*DPR)+'px system-ui, sans-serif'; ctx.fillText('Time: '+elapsed.toFixed(1)+'s   •   Best: '+best.toFixed(1)+'s', w/2, y+80*DPR);
-  ctx.fillStyle=MAGENTA; ctx.font=(18*DPR)+'px system-ui, sans-serif'; ctx.fillText('Press R to try again', w/2, y+120*DPR);
-}
-function loop(t){ let dt=(t-last)/1000; if(!Number.isFinite(dt)) dt=0; dt=Math.min(0.033, Math.max(0, dt)); last=t; if(!paused) update(dt); render(); requestAnimationFrame(loop); }
+
+function drawPlayer(p){ const bx=p.x, by=p.y - p.balloonRadius*2.2; if(!p.popped) drawBalloon(bx,by,p.balloonRadius,MAGENTA); const iw=playerImg.naturalWidth|0, ih=playerImg.naturalHeight|0; const hasSprite = (iw>=16 && ih>=16); const w=(hasSprite?iw:160)*SPRITE_SCALE, h=(hasSprite?ih:150)*SPRITE_SCALE; spriteTime+=1/60; const bob=Math.sin(spriteTime*6)*2*DPR; const lean=Math.max(-0.15, Math.min(0.15, (p.vx||0)/300)); ctx.save(); ctx.translate(p.x, p.y + bob); ctx.rotate(lean); if(p.facing<0){ ctx.scale(-1,1);} const prev=ctx.imageSmoothingEnabled; ctx.imageSmoothingEnabled=false; if(hasSprite){ ctx.drawImage(playerImg, -w/2, -h*0.6, w, h); } else { // fallback hombrecito
+    ctx.fillStyle = CYAN; ctx.fillRect(-6*DPR, -4*DPR, 12*DPR, 20*DPR); // cuerpo
+    ctx.fillStyle = MAGENTA; ctx.fillRect(-8*DPR, 14*DPR, 4*DPR, 10*DPR); ctx.fillRect(4*DPR, 14*DPR, 4*DPR, 10*DPR); // piernas
+    ctx.fillStyle = ORANGE; ctx.beginPath(); ctx.arc(0, -8*DPR, 6*DPR, 0, Math.PI*2); ctx.fill(); // cabeza
+  } ctx.imageSmoothingEnabled=prev; ctx.restore(); }
+
+function drawGameOver(){ const w=canvas.width,h=canvas.height; const boxW=Math.min(420*DPR,w*0.9), boxH=180*DPR; const x=(w-boxW)/2, y=(h-boxH)/2; ctx.fillStyle='rgba(0,0,0,0.6)'; ctx.fillRect(x,y,boxW,boxH); ctx.strokeStyle=CYAN; ctx.lineWidth=4*DPR; ctx.strokeRect(x,y,boxW,boxH); ctx.fillStyle='#fff'; ctx.textAlign='center'; ctx.font=(24*DPR)+'px system-ui, sans-serif'; ctx.fillText('Balloon popped! You fell...', w/2, y+42*DPR); ctx.fillStyle=ORANGE; ctx.font=(20*DPR)+'px system-ui, sans-serif'; ctx.fillText('Time: '+elapsed.toFixed(1)+'s   •   Best: '+best.toFixed(1)+'s', w/2, y+80*DPR); ctx.fillStyle=MAGENTA; ctx.font=(18*DPR)+'px system-ui, sans-serif'; ctx.fillText('Press R to try again', w/2, y+120*DPR); }
+
+// ---------- Runtime safety ----------
+function drawRuntimeError(e){ try{ ctx.save(); ctx.setTransform(1,0,0,1,0,0); ctx.fillStyle='#000'; ctx.fillRect(0,0,canvas.width,canvas.height); ctx.fillStyle='#ff5555'; ctx.font=(16*DPR)+'px monospace'; const msg = (e&&e.message)?e.message:String(e); ctx.fillText('JS ERROR: '+msg, 20*DPR, 40*DPR); ctx.restore(); }catch(_){} }
+function loop(t){ requestAnimationFrame(loop); let dt=(t-last)/1000; if(!Number.isFinite(dt)) dt=0; dt=Math.min(0.033, Math.max(0, dt)); last=t; try{ if(!paused) update(dt); render(); } catch(e){ drawRuntimeError(e); } }
+window.addEventListener('error', ev=>{ drawRuntimeError(ev.error||ev.message||ev); });
+window.addEventListener('unhandledrejection', ev=>{ drawRuntimeError(ev.reason||ev); });
 requestAnimationFrame(loop);
 addEventListener('pointerdown', ()=>{ initAudio(); }, { once:true });
 
 // ---------- Export helper ----------
-function buildExportHTML(dataUri){
-  const srcDoc = document.documentElement.outerHTML;
-  return srcDoc.replace(/(<img id="playerSprite"[^>]*src=")[^"]+(")/i, `$1${dataUri}$2`);
-}
-
-// ---------- Tests ----------
-;(function tests(){
-  console.assert(finiteOr(5, 1) === 5, 'finiteOr should pass finite');
-  console.assert(finiteOr(NaN, 7) === 7, 'finiteOr should fallback on NaN');
-  const cy = finiteOr(NaN, 0), h = canvas.height||1; const y1 = finiteOr((cy%h)-h, 0); const y2 = finiteOr((cy%h)+h, h);
-  console.assert(Number.isFinite(y1) && Number.isFinite(y2), 'gradient coordinates must be finite');
-  // Crow spawn outside screen + aiming tests
-  (function(){
-    for(let k=0;k<10;k++){
-      spawnCrow(); const c = crows[crows.length-1];
-      const out = (c.x < -49) || (c.x > canvas.width+49) || (c.y < finiteOr(cameraY,0)-49) || (c.y > finiteOr(cameraY,0)+canvas.height+49);
-      console.assert(out, 'crow should spawn outside');
-      // Velocity should point toward player at spawn
-      const vlen = Math.hypot(c.vx,c.vy)||1; const nvx=c.vx/vlen, nvy=c.vy/vlen;
-      const dx = (player.x - c.x), dy = (player.y - c.y); const dlen=Math.hypot(dx,dy)||1; const ndx=dx/dlen, ndy=dy/dlen;
-      const dot = nvx*ndx + nvy*ndy; console.assert(dot>0.98, 'crow velocity should aim at player (~same direction)');
-      console.assert(c.wait>=0.09 && c.wait<=0.56, 'wait delay within expected range');
-    }
-  })();
-})();
+function buildExportHTML(dataUri){ const srcDoc = document.documentElement.outerHTML; return srcDoc.replace(/(<img id=\"playerSprite\"[^>]*src=\")[^\"]+(\")/i, `$1${dataUri}$2`); }
+(function initExport(){ const btn = document.getElementById('btnExport'); btn?.addEventListener('click', ()=>{ try{ const useData = (playerImg.src||'').startsWith('data:'); const done = (dataUri)=>{ const html = buildExportHTML(dataUri||''); const blob = new Blob([html], {type:'text/html'}); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = 'balloon_traveler_export.html'; a.click(); setTimeout(()=> URL.revokeObjectURL(url), 1000); }; if(useData){ done(playerImg.src); return; } const tmp = document.createElement('canvas'); tmp.width = playerImg.naturalWidth||0; tmp.height = playerImg.naturalHeight||0; const c2 = tmp.getContext('2d'); c2.drawImage(playerImg,0,0); done(tmp.toDataURL('image/png')); }catch(e){ console.error(e); } }); })();
 
 })();
 </script>
